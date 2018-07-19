@@ -41,26 +41,33 @@ float softmax_region(Dtype* input, int classes)
   }
   return 0;
 }
-
+// 排序 标准 按照得分box1.score_ 排序
 bool BoxSortDecendScore(const BoxData& box1, const BoxData& box2) {
   return box1.score_ > box2.score_;
 }
 
+// NMS 非极大值抑制 剔除重叠度较高的 边框 返回留下的边框id
 void ApplyNms(const vector<BoxData>& boxes, vector<int>* idxes, float threshold) {
   map<int, int> idx_map;
   for (int i = 0; i < boxes.size() - 1; ++i) {
+    
     if (idx_map.find(i) != idx_map.end()) {
-      continue;
+      continue;// 该边框已经被剔除
     }
-    vector<float> box1 = boxes[i].box_;
-    for (int j = i + 1; j < boxes.size(); ++j) {
+	
+    vector<float> box1 = boxes[i].box_;// 最高得分的边框
+	
+    for (int j = i + 1; j < boxes.size(); ++j) {// 与剩下的 进行重叠度计算
+	
       if (idx_map.find(j) != idx_map.end()) {
-        continue;
+        continue;// 该边框已经被剔除
       }
+	  
       vector<float> box2 = boxes[j].box_;
       float iou = Calc_iou(box1, box2);
-      if (iou >= threshold) {
-        idx_map[j] = 1;
+      if (iou >= threshold) // 与最高得分的边框 重叠度较大
+	  {
+        idx_map[j] = 1;// 需要剔除
       }
     }
   }
@@ -70,6 +77,7 @@ void ApplyNms(const vector<BoxData>& boxes, vector<int>* idxes, float threshold)
     }
   }
 }
+
 // 返回一张图像的 标签 + 多边框数据的 标签
 template <typename Dtype>
 void GetGTBox(int side, const Dtype* label_data, map<int, vector<BoxData> >* gt_boxes) {
@@ -113,10 +121,10 @@ void GetGTBox(int side, const Dtype* label_data, map<int, vector<BoxData> >* gt_
 template <typename Dtype>
 void GetPredBox(int side, int num_object,  //  格子 13  5个物体  20种类别
                int num_class, Dtype* input_data,  // 输入数据 13*13*125 -> 13*13*5*25
-               map<int, vector<BoxData> >* pred_boxes, //  边框   评分类别  nms阈值(重叠)
+               map<int, vector<BoxData> >* pred_boxes, //  nms之后输出的边框   评分类别  nms阈值(重叠)
   int score_type, float nms_threshold, vector<Dtype> biases) {
 
- vector<BoxData> tmp_boxes;// 筛选出来的
+ vector<BoxData> tmp_boxes;// 筛选出来的  13*13*5个格子
   //int locations = pow(side, 2);
   for (int j = 0; j < side; ++j)// 13    0->12 格子
     for (int i = 0; i < side; ++i)// 13  0->12 
@@ -157,6 +165,7 @@ void GetPredBox(int side, int num_object,  //  格子 13  5个物体  20种类�
  // 置信度 需要 sigmoid() 处理到0~1===========================================
     float obj_score = sigmoid(input_data[index + 4]);
 	
+    // 预测得分=============================
 	if (score_type == 0) {
 	  pred_box.score_ = obj_score;// 按照 置信度 进行评价
 	} 
@@ -167,13 +176,13 @@ void GetPredBox(int side, int num_object,  //  格子 13  5个物体  20种类�
 	else {
 	  pred_box.score_ = obj_score * max_prob;// 按照 置信度*类别预测概率 进行评价
 	}
-
+    // 预测边框===============================
 	pred_box.box_.push_back(x);
 	pred_box.box_.push_back(y);
    	pred_box.box_.push_back(w);
 	pred_box.box_.push_back(h);
 	
-	tmp_boxes.push_back(pred_box);
+	tmp_boxes.push_back(pred_box);// 13*13*5个格子
 	//LOG(INFO)<<"Not nms pred_box:" << pred_box.label_ << " " << obj_score << " " << max_prob  << " " << pred_box.score_ << " " << pred_box.box_[0] << " " << pred_box.box_[1] << " " << pred_box.box_[2] << " " << pred_box.box_[3];	
     }  
   /*
@@ -230,22 +239,30 @@ void GetPredBox(int side, int num_object,  //  格子 13  5个物体  20种类�
       }
     }
   }*/
+  
+  //  进行NMU非极大值抑制 滤出 重叠度较高的框
   if (nms_threshold >= 0) {
+	  
+    // 排序 标准 按照得分box1.score_ 排序
     std::sort(tmp_boxes.begin(), tmp_boxes.end(), BoxSortDecendScore);
     vector<int> idxes;
+	// NMS 非极大值抑制 剔除重叠度较高的 边框 返回留下的边框id
     ApplyNms(tmp_boxes, &idxes, nms_threshold);
+	
     for (int i = 0; i < idxes.size(); ++i) {
       BoxData box_data = tmp_boxes[idxes[i]];
       //**************************************************************************************//
-      if (box_data.score_ < 0.005) // from darknet
-	continue;
+      if (box_data.score_ < 0.005) // 得分较小 跳过 from darknet
+          continue;
       //LOG(INFO)<<"box_data:" << box_data.label_ << " " << box_data.score_ << " " << box_data.box_[0] << " " << box_data.box_[1] << " " << box_data.box_[2] << " " << box_data.box_[3];
       if (pred_boxes->find(box_data.label_) == pred_boxes->end()) {
+        // 一种类别 单个物体边框
         (*pred_boxes)[box_data.label_] = vector<BoxData>();
-      }
+      }// 多种同类型物体 多个人
       (*pred_boxes)[box_data.label_].push_back(box_data);
     }
-  } else {
+  } 
+  else {
     for (std::map<int, vector<BoxData> >::iterator it = pred_boxes->begin(); it != pred_boxes->end(); ++it) {
       std::sort(it->second.begin(), it->second.end(), BoxSortDecendScore);
     }
