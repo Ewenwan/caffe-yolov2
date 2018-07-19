@@ -117,7 +117,7 @@ void GetGTBox(int side, const Dtype* label_data, map<int, vector<BoxData> >* gt_
   }
 }
 
-// 获取预测边框 =============================================
+// 获取预测边框 13*13*5 NMS抑制+置信度抑制==================================
 template <typename Dtype>
 void GetPredBox(int side, int num_object,  //  格子 13  5个物体  20种类别
                int num_class, Dtype* input_data,  // 输入数据 13*13*125 -> 13*13*5*25
@@ -274,16 +274,16 @@ void EvalDetectionLayer<Dtype>::LayerSetUp(
     const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
   EvalDetectionParameter param = this->layer_param_.eval_detection_param();
   side_ = param.side();//13*13格子
-  num_class_ = param.num_class();// voc 20类 / coco 80类
+  num_class_ = param.num_class();  // voc 20类 / coco 80类
   num_object_ = param.num_object();// 一个格子预测5个边框
-  threshold_ = param.threshold();
+  threshold_ = param.threshold();  // 预测正确/错误 IOU阈值
   //sqrt_ = param.sqrt();
   //constriant_ = param.constriant();
   
-  nms_ = param.nms();
+  nms_ = param.nms();// nms 阈值
   
   for (int c = 0; c < param.biases_size(); ++c){// 5种边框尺寸 10个参数
-    biases_.push_back(param.biases(c));
+    biases_.push_back(param.biases(c));// 网络输出 解码 到 预测边框尺寸需要用到
   }
 
   switch (param.score_type()) {
@@ -378,51 +378,64 @@ void EvalDetectionLayer<Dtype>::Forward_cpu(
       int label = it->first;// 标签 类别
       vector<BoxData>& g_boxes = it->second;// BoxData: label_ + score_ + box_ 
       for (int j = 0; j < g_boxes.size(); ++j) {// 边框数量
+         // 输出数据中的前 20个================================================
           top_data[top_index + label] += 1;     // 真实标签 物体类别出现的次数
       }
     }
 // 获取预测边框 =============================================
     map<int, vector<BoxData> > pred_boxes;
+    // 获取预测边框 13*13*5 -> NMS抑制+置信度抑制 ->  pred_boxes(数量少很多)
     //GetPredBox(side_, num_object_, num_class_, input_data + input_index, &pred_boxes, sqrt_, constriant_, score_type_, nms_);
     GetPredBox(side_, num_object_, num_class_, swap_data + input_index, &pred_boxes, score_type_, nms_, biases_);
-
-    int index = top_index + num_class_;
-    int pred_count(0);
+    // 输出数据 后面 的 13*13*5*4 =============================
+    int index = top_index + num_class_;// 20之后为 上面的 边框参数
+    int pred_count(0);// 
     for (std::map<int, vector<BoxData> >::iterator it = pred_boxes.begin(); it != pred_boxes.end(); ++it) {
-      int label = it->first;
-      vector<BoxData>& p_boxes = it->second;
+      int label = it->first;// 预测 边框标签
+      vector<BoxData>& p_boxes = it->second;// 多个边框 vector<BoxData>
+	  
+// 真实标签中 未找到该 类别=======================================
       if (gt_boxes.find(label) == gt_boxes.end()) {
         for (int b = 0; b < p_boxes.size(); ++b) {
-          top_data[index + pred_count * 4 + 0] = p_boxes[b].label_;
-          top_data[index + pred_count * 4 + 1] = p_boxes[b].score_;
-          top_data[index + pred_count * 4 + 2] = 0; //tp
-          top_data[index + pred_count * 4 + 3] = 1; //fp
+          top_data[index + pred_count * 4 + 0] = p_boxes[b].label_;// 标签
+          top_data[index + pred_count * 4 + 1] = p_boxes[b].score_;// 得分
+          top_data[index + pred_count * 4 + 2] = 0; //tp 
+          top_data[index + pred_count * 4 + 3] = 1; //fp 错误的预测为正确的 
           ++pred_count;
         }
-        continue;
+        continue;// 跳过预测错误的，只记录fp
       } 
-      vector<BoxData>& g_boxes = gt_boxes[label];
-      vector<bool> records(g_boxes.size(), false);
-      for (int k = 0; k < p_boxes.size(); ++k) {
-        top_data[index + pred_count * 4 + 0] = p_boxes[k].label_;
-        top_data[index + pred_count * 4 + 1] = p_boxes[k].score_;
-        float max_iou(-1);
-        int idx(-1);
+  // 真实标签找到了该预测的类别======================================
+      vector<BoxData>& g_boxes = gt_boxes[label];// 真实标签中该 类别的 多个真实边框=====
+	  
+      vector<bool> records(g_boxes.size(), false);// 记录
+	  
+      for (int k = 0; k < p_boxes.size(); ++k) {// 遍历 每个 预测边框==============
+        top_data[index + pred_count * 4 + 0] = p_boxes[k].label_;// 标签
+        top_data[index + pred_count * 4 + 1] = p_boxes[k].score_;// 得分
+        float max_iou(-1);// 预测边框最接近的  真实边框 iou
+        int idx(-1);// 对应的 真实边框id
+		
+		// 遍历每个真实边框 找到 预测边框最接近的 真实边框===========
         for (int g = 0; g < g_boxes.size(); ++g) {
-          float iou = Calc_iou(p_boxes[k].box_, g_boxes[g].box_);
+          float iou = Calc_iou(p_boxes[k].box_, g_boxes[g].box_);// 计算交并比
           if (iou > max_iou) {
-            max_iou = iou;
-            idx = g;
+            max_iou = iou;// 记录 每个预测边框 最接近的  真实边框 的 IOU
+            idx = g;// 对应的 真实边框id
           }
         }
+		// 根据 交并比 确定判断 预测 正确/错误
         if (max_iou >= threshold_) { 
-            if (!records[idx]) {
-              records[idx] = true;
-              top_data[index + pred_count * 4 + 2] = 1;
-              top_data[index + pred_count * 4 + 3] = 0;
-            } else {
+             
+            if ( !records[idx] ) {
+              records[idx] = true;// 对应的 真实边框id
+              top_data[index + pred_count * 4 + 2] = 1; // tp  正->正确
+              top_data[index + pred_count * 4 + 3] = 0; // fp
+            } 
+            else 
+            {
               top_data[index + pred_count * 4 + 2] = 0;
-              top_data[index + pred_count * 4 + 3] = 1;
+              top_data[index + pred_count * 4 + 3] = 1;// 错误 -> 正确
             }
         }
         ++pred_count;
