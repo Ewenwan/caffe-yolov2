@@ -328,10 +328,82 @@ void Solver<Dtype>::TestAll() {
   for (int test_net_id = 0;
        test_net_id < test_nets_.size() && !requested_early_exit_;
        ++test_net_id) {
-    Test(test_net_id);
+   // 需要分开 分类网络和检测网络的测试
+    LOG(INFO) << "begining testing ....============================ ";
+    //Test(test_net_id);
+    Test_yolov2(test_net_id);
   }
 }
+template <typename Dtype>
+void Solver<Dtype>::Test_yolov2(const int test_net_id) {
+  CHECK(Caffe::root_solver());
+  LOG(INFO) << "Iteration " << iter_
+            << ", Testing  yolov2 net (#" << test_net_id << ")";
+  CHECK_NOTNULL(test_nets_[test_net_id].get())->
+      ShareTrainedLayersWith(net_.get());
+  //vector<Dtype> test_score;
+  //vector<int> test_score_output_id;
+  const shared_ptr<Net<Dtype> >& test_net = test_nets_[test_net_id];
+  Dtype loss = 0;
+  
+  float mAP = 0.;
+  
+  for (int i = 0; i < param_.test_iter(test_net_id); ++i) 
+  {
+    SolverAction::Enum request = GetRequestedAction();
+    // Check to see if stoppage of testing/training has been requested.
+    while (request != SolverAction::NONE) {
+        if (SolverAction::SNAPSHOT == request) {
+          Snapshot();
+        } else if (SolverAction::STOP == request) {
+          requested_early_exit_ = true;
+        }
+        request = GetRequestedAction();
+    }
+    if (requested_early_exit_) {
+      // break out of test loop.
+      break;
+    }
 
+    Dtype iter_loss; 
+    const vector<Blob<Dtype>*>& result = test_net->Forward(&iter_loss);
+	
+	//test_net->Forward(&iter_loss);
+	const shared_ptr<Blob<Dtype> > result_ptr = test_net->blob_by_name("eval_det"); // 检测评估层输出
+	const Dtype* pstart = result_ptr->cpu_data(); // eval_det->cpu_data()返回的是多维数据（数组）
+    if (param_.test_compute_loss()) 
+	{
+      loss += iter_loss;
+	} 
+	
+   	{
+     		
+	 for (int j = 0; j < 4; j++)
+	  {
+	    const Dtype* temp = pstart + j*(20+13*13*5*4+1);
+		//for (int i = 0; i < 21; i++)
+		// {
+			//std::cout << *(temp+20) << std::endl;
+			mAP += *(temp+20);
+			//pstart++;
+		// }
+	  }
+    } 
+//LOG(INFO) << "result.size() :  " << result.size();
+	
+    //for (int j = 0; j < result.size(); ++j) // 遍历每一张图片的检测结果
+	//{
+      // ================================
+    //  LOG(INFO) << "result[j] width :   " <<  result[j]->width();
+	//  LOG(INFO) << "result[j] height :  " <<  result[j]->height();
+    //  CHECK_EQ(result[j]->width(), 5);// 第二维度  每个预测结果
+	//}
+  }
+  mAP /= (param_.test_iter(test_net_id)*4);
+  LOG(INFO) << "  Test net output :" << mAP << "mAP";
+}
+
+// ssd test====================
 template <typename Dtype>
 void Solver<Dtype>::Test(const int test_net_id) {
   CHECK(Caffe::root_solver());
@@ -348,7 +420,8 @@ void Solver<Dtype>::Test(const int test_net_id) {
   map<int, map<int, vector<pair<float, int> > > > all_false_pos;
   map<int, map<int, int> > all_num_pos;
 
-  for (int i = 0; i < param_.test_iter(test_net_id); ++i) {
+  for (int i = 0; i < param_.test_iter(test_net_id); ++i) 
+  {
     SolverAction::Enum request = GetRequestedAction();
     // Check to see if stoppage of testing/training has been requested.
     while (request != SolverAction::NONE) {
@@ -370,13 +443,16 @@ void Solver<Dtype>::Test(const int test_net_id) {
     if (param_.test_compute_loss()) {
       loss += iter_loss;
     }
-    for (int j = 0; j < result.size(); ++j) {
-      CHECK_EQ(result[j]->width(), 5);
+    for (int j = 0; j < result.size(); ++j) {// 图片数量
+      // ================================
+      LOG(INFO) << "result[j] width :   " <<  result[j]->width();
+	  LOG(INFO) << "result[j] height :  " <<  result[j]->height();
+      CHECK_EQ(result[j]->width(), 5);// 第二维度  每个预测结果
       const Dtype* result_vec = result[j]->cpu_data();
       int num_det = result[j]->height();
-      for (int k = 0; k < num_det; ++k) {
-        int item_id = static_cast<int>(result_vec[k * 5]);
-        int label = static_cast<int>(result_vec[k * 5 + 1]);
+      for (int k = 0; k < num_det; ++k) {// 预测边框数量 
+        int item_id = static_cast<int>(result_vec[k * 5]);// id
+        int label = static_cast<int>(result_vec[k * 5 + 1]);// 标签
         if (item_id == -1) {
           // Special row of storing number of positives for a label.
           if (all_num_pos[j].find(label) == all_num_pos[j].end()) {
@@ -401,7 +477,8 @@ void Solver<Dtype>::Test(const int test_net_id) {
     }
   }
 
-  for (int i = 0; i < all_true_pos.size(); ++i) {
+  for (int i = 0; i < all_true_pos.size(); ++i) 
+  {
     if (all_true_pos.find(i) == all_true_pos.end()) {
       LOG(FATAL) << "Missing output_blob true_pos: " << i;
     }
