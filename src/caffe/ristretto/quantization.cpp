@@ -53,21 +53,35 @@ void Quantization::QuantizeNet() {
   float accuracy;
   RunForwardBatches(this->iterations_, net_val, &accuracy);
   test_score_baseline_ = accuracy;
+  
+  LOG(INFO) << "test_score_baseline_  : " << test_score_baseline_ << "  mAP";
+  
   delete net_val;
   // Run the reference floating point network on train data set to find maximum
   // values. Do statistic for 10 batches.
   Net<float>* net_test = new Net<float>(model_, caffe::TRAIN);
   net_test->CopyTrainedLayersFrom(weights_);
-  //RunForwardBatches(10, net_test, &accuracy, true);
+  RunForwardBatches(10, net_test, &accuracy, true);
+  // true-> caffe_net->RangeInLayers()获取网络的数据范围
+  
   delete net_test;
   // Do network quantization and scoring.
-  if (trimming_mode_ == "dynamic_fixed_point") {
+  
+  if (trimming_mode_ == "dynamic_fixed_point") 
+  {
+    LOG(INFO) << "Begining Quantize2DynamicFixedPoint ...";
     Quantize2DynamicFixedPoint();
-  } else if (trimming_mode_ == "minifloat") {
+  } 
+  else if (trimming_mode_ == "minifloat") 
+  {
     Quantize2MiniFloat();
-  } else if (trimming_mode_ == "integer_power_of_2_weights") {
+  } 
+  else if (trimming_mode_ == "integer_power_of_2_weights") 
+  {
     Quantize2IntegerPowerOf2Weights();
-  } else {
+  } 
+  else 
+  {
     LOG(FATAL) << "Unknown trimming mode: " << trimming_mode_;
   }
 }
@@ -154,6 +168,7 @@ void Quantization::TestClassification(const int iterations, Net<float>* caffe_ne
     if(do_stats) {
       caffe_net->RangeInLayers(&layer_names_, &max_in_, &max_out_,
           &max_params_);
+		  continue;
     }
     // Keep track of network score over multiple batches.
     loss += iter_loss;
@@ -197,6 +212,7 @@ void Quantization::TestClassification(const int iterations, Net<float>* caffe_ne
 void Quantization::TestDetection_yolov2(const int iterations, Net<float>* caffe_net,
       float* accuracy, const bool do_stats, const int score_number)
 {
+   LOG(INFO) << "Running for TestDetection_yolov2 " << iterations << " iterations.";
    float mAP = 0.;
    float loss = 0.;
    for (int i = 0; i < iterations; ++i) 
@@ -213,7 +229,7 @@ void Quantization::TestDetection_yolov2(const int iterations, Net<float>* caffe_
       continue;
     }
     loss += iter_loss;
-	
+	//LOG(INFO) << " loss :" << i  << "   "<< iter_loss;
     {
      		
 	 for (int j = 0; j < 4; j++)
@@ -345,11 +361,19 @@ void Quantization::Quantize2DynamicFixedPoint() {
   // The integer length is chosen such that no saturation occurs.
   // This approximation assumes an infinitely long factional part.
   // For layer activations, we reduce the integer length by one bit.
+  
+  LOG(INFO) << "find the max in input&output&param...  " ;
+  
+  LOG(INFO) << "layer_names_.size() ：  " << layer_names_.size();
+  
   for (int i = 0; i < layer_names_.size(); ++i) {
-    il_in_.push_back((int)ceil(log2(max_in_[i])));
-    il_out_.push_back((int)ceil(log2(max_out_[i])));
-    il_params_.push_back((int)ceil(log2(max_params_[i])+1));
+    il_in_.push_back((int)ceil(log2(max_in_[i])));// 输入
+    il_out_.push_back((int)ceil(log2(max_out_[i])));// 输出
+    il_params_.push_back((int)ceil(log2(max_params_[i])+1));// 卷积核
   }
+  
+  LOG(INFO) << "layer_names_.size() ：  " << layer_names_.size();
+  
   // Debug
   for (int k = 0; k < layer_names_.size(); ++k) {
     LOG(INFO) << "Layer " << layer_names_[k] <<
@@ -369,8 +393,12 @@ void Quantization::Quantize2DynamicFixedPoint() {
   Net<float>* net_test;
   // 量化卷积层 =====================================================
   for (int bitwidth = 16; bitwidth > 4; bitwidth /= 2) {
+
+    // 出错 =============================================
+	// 修改网络参数 某些层变成量化层&添加量化参数
     EditNetDescriptionDynamicFixedPoint(&param, "Convolution", "Parameters",
         bitwidth, -1, -1, -1);
+		
     net_test = new Net<float>(param, NULL);
     net_test->CopyTrainedLayersFrom(weights_);
     RunForwardBatches(iterations_, net_test, &accuracy);
@@ -592,14 +620,20 @@ void Quantization::Quantize2IntegerPowerOf2Weights() {
   LOG(INFO) << "Please fine-tune.";
 }
 
+
+// 动态固定点 量化 修改网络参数
 void Quantization::EditNetDescriptionDynamicFixedPoint(NetParameter* param,
       const string layers_2_quantize, const string net_part, const int bw_conv,
       const int bw_fc, const int bw_in, const int bw_out) {
-  for (int i = 0; i < param->layer_size(); ++i) {
+// 遍历每一层原有网络
+  for (int i = 0; i < param->layer_size(); ++i) { 
+  
+// 量化卷积层============================================================
     // if this is a convolutional layer which should be quantized ...
     if (layers_2_quantize.find("Convolution") != string::npos &&
         param->layer(i).type().find("Convolution") != string::npos) {
-      // quantize parameters
+			
+      // quantize parameters 卷积权重参数
       if (net_part.find("Parameters") != string::npos) {
         LayerParameter* param_layer = param->mutable_layer(i);
         param_layer->set_type("ConvolutionRistretto");
@@ -607,7 +641,7 @@ void Quantization::EditNetDescriptionDynamicFixedPoint(NetParameter* param,
             GetIntegerLengthParams(param->layer(i).name()));
         param_layer->mutable_quantization_param()->set_bw_params(bw_conv);
       }
-      // quantize activations
+      // quantize activations  激活 输入输出
       if (net_part.find("Activations") != string::npos) {
         LayerParameter* param_layer = param->mutable_layer(i);
         param_layer->set_type("ConvolutionRistretto");
@@ -619,10 +653,13 @@ void Quantization::EditNetDescriptionDynamicFixedPoint(NetParameter* param,
         param_layer->mutable_quantization_param()->set_bw_layer_out(bw_out);
       }
     }
+    
+// 量化全连接层=====================================
     // if this is an inner product layer which should be quantized ...
     if (layers_2_quantize.find("InnerProduct") != string::npos &&
         (param->layer(i).type().find("InnerProduct") != string::npos ||
-        param->layer(i).type().find("FcRistretto") != string::npos)) {
+         param->layer(i).type().find("FcRistretto") != string::npos)) {
+      // 量化卷积参数=========================
       // quantize parameters
       if (net_part.find("Parameters") != string::npos) {
         LayerParameter* param_layer = param->mutable_layer(i);
@@ -631,6 +668,7 @@ void Quantization::EditNetDescriptionDynamicFixedPoint(NetParameter* param,
             GetIntegerLengthParams(param->layer(i).name()));
         param_layer->mutable_quantization_param()->set_bw_params(bw_fc);
       }
+      // 量化激活输入输出===============================================
       // quantize activations
       if (net_part.find("Activations") != string::npos) {
         LayerParameter* param_layer = param->mutable_layer(i);
@@ -641,8 +679,10 @@ void Quantization::EditNetDescriptionDynamicFixedPoint(NetParameter* param,
         param_layer->mutable_quantization_param()->set_fl_layer_out(bw_out -
             GetIntegerLengthOut(param->layer(i).name()) );
         param_layer->mutable_quantization_param()->set_bw_layer_out(bw_out);
-      }
+      }  
     }
+	
+	
   }
 }
 
