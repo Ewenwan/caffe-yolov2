@@ -14,7 +14,6 @@
 #include <boost/make_shared.hpp>
 using boost::shared_ptr;
 
-
 using caffe::Caffe;
 using caffe::Net;
 using caffe::string;
@@ -24,9 +23,12 @@ using caffe::LayerParameter;
 using caffe::NetParameter;
 //using namespace std;
 
-Quantization::Quantization(string model, string weights, string model_quantized,
+//void 
+// 构造函数不应该有返回值
+Quantization::Quantization(string model, string model_test, string weights, string model_quantized,
       int iterations, string trimming_mode, double error_margin, string gpus, string type) {
   this->model_ = model;
+  this->model_test_ = model_test;
   this->weights_ = weights;
   this->model_quantized_ = model_quantized;
   this->iterations_ = iterations;
@@ -46,7 +48,7 @@ void Quantization::QuantizeNet() {
   SetGpu();
   // Run the reference floating point network on validation set to find baseline
   // accuracy.
-  Net<float>* net_val = new Net<float>(model_, caffe::TEST);
+  Net<float>* net_val = new Net<float>(model_test_, caffe::TEST);//测试网络
   net_val->CopyTrainedLayersFrom(weights_);
   float accuracy;
   RunForwardBatches(this->iterations_, net_val, &accuracy);
@@ -56,7 +58,7 @@ void Quantization::QuantizeNet() {
   // values. Do statistic for 10 batches.
   Net<float>* net_test = new Net<float>(model_, caffe::TRAIN);
   net_test->CopyTrainedLayersFrom(weights_);
-  RunForwardBatches(10, net_test, &accuracy, true);
+  //RunForwardBatches(10, net_test, &accuracy, true);
   delete net_test;
   // Do network quantization and scoring.
   if (trimming_mode_ == "dynamic_fixed_point") {
@@ -359,13 +361,14 @@ void Quantization::Quantize2DynamicFixedPoint() {
   // Score net with dynamic fixed point convolution parameters.
   // The rest of the net remains in high precision format.
   NetParameter param;
-  caffe::ReadNetParamsFromTextFileOrDie(model_, &param);
+  caffe::ReadNetParamsFromTextFileOrDie(model_test_, &param);
   param.mutable_state()->set_phase(caffe::TEST);
   vector<int> test_bw_conv_params;
   vector<float> test_scores_conv_params;
   float accuracy;
   Net<float>* net_test;
-  for (int bitwidth = 16; bitwidth > 0; bitwidth /= 2) {
+  // 量化卷积层 =====================================================
+  for (int bitwidth = 16; bitwidth > 4; bitwidth /= 2) {
     EditNetDescriptionDynamicFixedPoint(&param, "Convolution", "Parameters",
         bitwidth, -1, -1, -1);
     net_test = new Net<float>(param, NULL);
@@ -379,11 +382,12 @@ void Quantization::Quantize2DynamicFixedPoint() {
 
   // Score net with dynamic fixed point inner product parameters.
   // The rest of the net remains in high precision format.
-  caffe::ReadNetParamsFromTextFileOrDie(model_, &param);
+  // 量化全连接层
+  caffe::ReadNetParamsFromTextFileOrDie(model_test_, &param);
   param.mutable_state()->set_phase(caffe::TEST);
   vector<int> test_bw_fc_params;
   vector<float> test_scores_fc_params;
-  for (int bitwidth = 16; bitwidth > 0; bitwidth /= 2) {
+  for (int bitwidth = 4; bitwidth > 0; bitwidth /= 2) {
     EditNetDescriptionDynamicFixedPoint(&param, "InnerProduct", "Parameters",
         -1, bitwidth, -1, -1);
     net_test = new Net<float>(param, NULL);
@@ -397,11 +401,12 @@ void Quantization::Quantize2DynamicFixedPoint() {
 
   // Score net with dynamic fixed point layer activations.
   // The rest of the net remains in high precision format.
-  caffe::ReadNetParamsFromTextFileOrDie(model_, &param);
+  // 量化全连接+卷积 ==========================================
+  caffe::ReadNetParamsFromTextFileOrDie(model_test_, &param);
   param.mutable_state()->set_phase(caffe::TEST);
   vector<int> test_bw_layer_activations;
   vector<float> test_scores_layer_activations;
-  for (int bitwidth = 16; bitwidth > 0; bitwidth /= 2) {
+  for (int bitwidth = 16; bitwidth > 2; bitwidth /= 2) {
     EditNetDescriptionDynamicFixedPoint(&param, "Convolution_and_InnerProduct",
         "Activations", -1, -1, bitwidth, bitwidth);
     net_test = new Net<float>(param, NULL);
@@ -443,7 +448,8 @@ void Quantization::Quantize2DynamicFixedPoint() {
   // Score dynamic fixed point network.
   // This network combines dynamic fixed point parameters in convolutional and
   // inner product layers, as well as dynamic fixed point activations.
-  caffe::ReadNetParamsFromTextFileOrDie(model_, &param);
+  // 量化全连接+卷积+激活====================================================
+  caffe::ReadNetParamsFromTextFileOrDie(model_test_, &param);
   param.mutable_state()->set_phase(caffe::TEST);
   EditNetDescriptionDynamicFixedPoint(&param, "Convolution_and_InnerProduct",
       "Parameters_and_Activations", bw_conv_params_, bw_fc_params_, bw_in_,
@@ -500,7 +506,7 @@ void Quantization::Quantize2MiniFloat() {
 
   // Score net with minifloat parameters and activations.
   NetParameter param;
-  caffe::ReadNetParamsFromTextFileOrDie(model_, &param);
+  caffe::ReadNetParamsFromTextFileOrDie(model_test_, &param);
   param.mutable_state()->set_phase(caffe::TEST);
   vector<int> test_bitwidth;
   vector<float> test_scores;
@@ -528,7 +534,7 @@ void Quantization::Quantize2MiniFloat() {
   }
 
   // Write prototxt file of net with best bitwidth
-  caffe::ReadNetParamsFromTextFileOrDie(model_, &param);
+  caffe::ReadNetParamsFromTextFileOrDie(model_test_, &param);
   EditNetDescriptionMiniFloat(&param, best_bitwidth);
   WriteProtoToTextFile(param, model_quantized_);
 
@@ -557,7 +563,7 @@ void Quantization::Quantize2IntegerPowerOf2Weights() {
   // Score net with integer-power-of-two weights and dynamic fixed point
   // activations.
   NetParameter param;
-  caffe::ReadNetParamsFromTextFileOrDie(model_, &param);
+  caffe::ReadNetParamsFromTextFileOrDie(model_test_, &param);
   param.mutable_state()->set_phase(caffe::TEST);
   float accuracy;
   Net<float>* net_test;
