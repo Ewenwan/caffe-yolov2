@@ -15,9 +15,15 @@ using caffe::Net;
  */
 class Quantization {
 public:
-  explicit Quantization(string model, string weights, string model_quantized,
+
+  //Quantization(string model, string model_test, string weights, string model_quantized,
+  //    int iterations, string trimming_mode, double error_margin, string gpus, string type);
+  // void 
+  explicit Quantization(string model, string model_test, string weights, string model_quantized,
       int iterations, string trimming_mode, double error_margin, string gpus, string type);
+	  
   void QuantizeNet();
+  
 private:
   void CheckWritePermissions(const string path);
   void SetGpu();
@@ -36,13 +42,11 @@ private:
 
   void TestClassification(const int iterations, Net<float>* caffe_net,
       float* accuracy, const bool do_stats = false, const int score_number = 0);
-  
   void TestDetection(const int iterations, Net<float>* caffe_net,
       float* accuracy, const bool do_stats = false, const int score_number = 0);
   
   void TestDetection_yolov2(const int iterations, Net<float>* caffe_net,
       float* accuracy, const bool do_stats = false, const int score_number = 0);
-  
   /**
    * @brief Quantize convolutional and fully connected layers to dynamic fixed
    * point.
@@ -104,6 +108,7 @@ private:
   int GetIntegerLengthOut(const string layer_name);
 
   string model_;
+  string model_test_;
   string weights_;
   string model_quantized_;
   string eval_type_;
