@@ -36,8 +36,13 @@ private:
 
   void TestClassification(const int iterations, Net<float>* caffe_net,
       float* accuracy, const bool do_stats = false, const int score_number = 0);
+  
   void TestDetection(const int iterations, Net<float>* caffe_net,
       float* accuracy, const bool do_stats = false, const int score_number = 0);
+  
+  void TestDetection_yolov2(const int iterations, Net<float>* caffe_net,
+      float* accuracy, const bool do_stats = false, const int score_number = 0);
+  
   /**
    * @brief Quantize convolutional and fully connected layers to dynamic fixed
    * point.
