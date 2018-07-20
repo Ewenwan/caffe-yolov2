@@ -10,6 +10,9 @@
 #include "caffe/caffe.hpp"
 #include "ristretto/quantization.hpp"
 #include "caffe/util/bbox_util.hpp"
+//#include "caffe/solver.hpp"
+#include <boost/make_shared.hpp>
+using boost::shared_ptr;
 
 
 using caffe::Caffe;
@@ -116,9 +119,17 @@ void Quantization::RunForwardBatches(const int iterations,
 
   if (eval_type_ == "classification") {
       TestClassification(iterations, caffe_net, accuracy, do_stats, score_number);
-    } else if (eval_type_ == "detection") {
+    } 
+	else if (eval_type_ == "detection") 
+	{
       TestDetection(iterations, caffe_net, accuracy, do_stats, score_number);
-    } else {
+    } 
+	else if (eval_type_ == "yolov2_detection") 
+	{
+	  TestDetection_yolov2(iterations, caffe_net, accuracy, do_stats, score_number);
+	}
+	else 
+	{
       LOG(FATAL) << "Unknown evaluation type: " << eval_type_;
     }
   
@@ -179,6 +190,49 @@ void Quantization::TestClassification(const int iterations, Net<float>* caffe_ne
   *accuracy = test_score[score_number] / iterations;
 }
 
+// yolov2 测试
+//template <typename Dtype>
+void Quantization::TestDetection_yolov2(const int iterations, Net<float>* caffe_net,
+      float* accuracy, const bool do_stats, const int score_number)
+{
+   float mAP = 0.;
+   float loss = 0.;
+   for (int i = 0; i < iterations; ++i) 
+   {
+    float iter_loss;
+    //const vector<Blob<Dtype>*>& result =  caffe_net->Forward(&iter_loss);
+	caffe_net->Forward(&iter_loss);
+    const shared_ptr<Blob<float> > result_ptr = caffe_net->blob_by_name("eval_det"); // 检测评估层输出
+	const float* pstart = result_ptr->cpu_data(); // eval_det->cpu_data()返回的是多维数据（数组）
+    // Find maximal values in network.
+    if(do_stats) {
+      caffe_net->RangeInLayers(&layer_names_, &max_in_, &max_out_,
+          &max_params_);
+      continue;
+    }
+    loss += iter_loss;
+	
+    {
+     		
+	 for (int j = 0; j < 4; j++)
+	  {
+	    const float* temp = pstart + j*(20+13*13*5*4+1);
+		//std::cout << *(temp+20) << std::endl;
+		mAP += *(temp+20);
+	  }
+    }
+	
+   }
+   mAP /= (iterations*4);
+   LOG(INFO) << "  Test net output :" << mAP << "mAP";
+  
+   loss /= iterations;
+   LOG(INFO) << "Test loss: " << loss;
+   
+   *accuracy = mAP;
+}
+
+// ssd测试
 void Quantization::TestDetection(const int iterations, Net<float>* caffe_net,
       float* accuracy, const bool do_stats, const int score_number)
 {
@@ -281,6 +335,7 @@ void Quantization::TestDetection(const int iterations, Net<float>* caffe_net,
   }
   loss /= iterations;
   LOG(INFO) << "Test loss: " << loss;
+  
 }
 
 void Quantization::Quantize2DynamicFixedPoint() {
