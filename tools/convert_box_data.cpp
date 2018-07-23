@@ -24,6 +24,9 @@
 #include "caffe/util/io.hpp"
 #include "caffe/util/rng.hpp"
 
+///////////////////////////
+#include <unistd.h>
+
 using namespace caffe;  // NOLINT(build/namespaces)
 using std::pair;
 using boost::scoped_ptr;
@@ -87,7 +90,7 @@ int main(int argc, char** argv) {
   std::map<std::string, int> label_map;
   std::string tmp_line;
   while (std::getline(labelfile, tmp_line)) {
-    size_t pos = tmp_line.find_last_of(' ');
+    size_t pos = tmp_line.find_last_of(' ');  
     label_map[tmp_line.substr(0, pos)] = atoi(tmp_line.substr(pos+1).c_str()); 
   }
   //********************************************************************************//
@@ -99,6 +102,12 @@ int main(int argc, char** argv) {
   size_t pos;
   while (std::getline(infile, line)) {
     pos = line.find_last_of(' ');
+////////////////////////////////////////////////      
+    std::string jpg = line.substr(0, pos);
+    std::string xml = line.substr(pos+1);
+    if((access(jpg.c_str(),0)==-1) || (access(xml.c_str(),0)==-1) ) continue;
+///////////////////////////////////////      
+      
     lines.push_back(std::make_pair(line.substr(0, pos), line.substr(pos+1)));
   }
   //********************************************************************************//
