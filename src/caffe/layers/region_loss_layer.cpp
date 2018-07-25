@@ -15,23 +15,35 @@
 int iter = 0;
 
 namespace caffe {
+
+
+// 类别概率  减去最大值 (-,0]) 在指数映射 -> (0,1] 后归一化
 template <typename Dtype>
 Dtype softmax_region(Dtype* input, int classes)
 {
   Dtype sum = 0;
-  Dtype large = input[0];
-  for (int i = 0; i < classes; ++i){
+  Dtype large = input[0];// 初始化最大值
+
+  for (int i = 0; i < classes; ++i)
+  {
     if (input[i] > large)
-      large = input[i];
+      large = input[i];// 记录类别 概率中的最大值
   }
-  for (int i = 0; i < classes; ++i){
-    Dtype e = exp(input[i] - large);
-    sum += e;
+  for (int i = 0; i < classes; ++i)
+  {
+    Dtype e = exp(input[i] - large);// 减去最大值 (-,0]) 在指数映射 -> (0,1]
+    sum += e;// 求和
     input[i] = e;
   }
-  for (int i = 0; i < classes; ++i){
-    input[i] = input[i] / sum;
+  for (int i = 0; i < classes; ++i)
+  {
+    input[i] = input[i] / sum;// 归一化  错误应该在这里
+	
+// 剔除 nan值=====================================
+// NAN != NAN 
+    if(!(input[i] == input[i])) input[i] = 0;
   }
+  
   return 0;
 }
 
@@ -40,7 +52,7 @@ void softmax_tree(Dtype* input, tree *t)
 {
   int count = 0;
   for (int i = 0; i < t->groups; ++i){ //1
-    int group_size = t->group_size[i]; //20
+    int group_size = t->group_size[i]; // 20/80
     softmax_region(input + count, group_size);
     count += group_size; 
   }
@@ -118,27 +130,32 @@ Dtype get_hierarchy_prob(Dtype* input_data, tree *t, int c)
   }
   return p;
 }
-
+// 层初始化=========================================================
 template <typename Dtype>
 void RegionLossLayer<Dtype>::LayerSetUp(
-    const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
-  LossLayer<Dtype>::LayerSetUp(bottom, top);
+    const vector<Blob<Dtype>*>& bottom, // 输入
+    const vector<Blob<Dtype>*>& top)    // 输出
+{
+  LossLayer<Dtype>::LayerSetUp(bottom, top);// 确保 损失层LossLayer的 loss_weight 权重非零
+  
+  // 获取 RegionLossLayer 的 region_loss_param参数
   RegionLossParameter param = this->layer_param_.region_loss_param();
   
-  side_ = param.side(); //13
-  bias_match_ = param.bias_match(); //
-  num_class_ = param.num_class(); //20
-  coords_ = param.coords(); //4
-  num_ = param.num(); //5
-  softmax_ = param.softmax(); //
-  softmax_tree_ = param.softmax_tree(); //string
+  side_ = param.side(); //13   最终特征图的尺度 分割的格子数量 13*13
+  bias_match_ = param.bias_match(); // 5个边框的10个 biases  边框尺寸 权重参数
+  num_class_ = param.num_class();   // 20/80 类别数量
+  coords_ = param.coords();         // 4 坐标参数  x,y,w,h
+  num_ = param.num();               // 5 每个格子预测5个边框
+  softmax_ = param.softmax();       // 1 权重
+  softmax_tree_ = param.softmax_tree(); //string  无此参数
   if (softmax_tree_ != "")
-    t_ = tree(softmax_tree_);
+    t_ = tree(softmax_tree_);    // 新建一个
   
-  class_map_ = param.class_map();
-  if (class_map_ != ""){
+  class_map_ = param.class_map();// 无此参数
+  if (class_map_ != "")
+  {
     string line;
-    std::fstream fin(class_map_.c_str());
+    std::fstream fin(class_map_.c_str());// 读取 类别映射 文件
     if (!fin){
       LOG(INFO) << "no map file";
     }
@@ -148,9 +165,9 @@ void RegionLossLayer<Dtype>::LayerSetUp(
     while (getline(fin, line)){
       stringstream ss;
       ss << line;
-      ss >> id;
+      ss >> id;// 类别id
       
-      cls_map_[index] = id;
+      cls_map_[index] = id;// 类别映射=====================
       index ++;
     }
     fin.close();
@@ -160,100 +177,141 @@ void RegionLossLayer<Dtype>::LayerSetUp(
   //jitter_ = param.jitter(); 
   //rescore_ = param.rescore();
   
-  object_scale_ = param.object_scale(); //5.0
-  noobject_scale_ = param.noobject_scale(); //1.0
-  class_scale_ = param.class_scale(); //1.0
-  coord_scale_ = param.coord_scale(); //1.0
+  object_scale_ = param.object_scale();     //5.0  前进权重
+  noobject_scale_ = param.noobject_scale(); //1.0  背景权重
+  class_scale_ = param.class_scale();       //1.0  类别权重
+  coord_scale_ = param.coord_scale();       //1.0  边框权重
   
   //absolute_ = param.absolute();
-  thresh_ = param.thresh(); //0.6
+  thresh_ = param.thresh(); // 0.5
   //random_ = param.random();  
-
-  for (int c = 0; c < param.biases_size(); ++c) {
+  
+// 读取5种预设边框 尺寸=========================================
+  for (int c = 0; c < param.biases_size(); ++c) 
+  {
      biases_.push_back(param.biases(c)); 
-  } //0.73 0.87;2.42 2.65;4.30 7.04;10.24 4.59;12.68 11.87;
-
+  } 
+  //0.73 0.87;2.42 2.65;4.30 7.04; 10.24 4.59;12.68 11.87;
+  //1.08 1.19;3.42 4.41;6.63 11.38;9.42 5.11;16.62 10.52; 
+  
+// 网络输出
   int input_count = bottom[0]->count(1); //h*w*n*(classes+coords+1) = 13*13*5*(20+4+1)
-  int label_count = bottom[1]->count(1); //30*5
+// 标签数据
+  int label_count = bottom[1]->count(1); //30*5 30个边框(4+1)  置信度为1
+  
   // outputs: classes, iou, coordinates
   int tmp_input_count = side_ * side_ * num_ * (coords_ + num_class_ + 1); //13*13*5*(20+4+1) label: isobj, class_label, coordinates
-  int tmp_label_count = 30 * num_;
+  int tmp_label_count = 30 * num_;// 这里有问题 需要查看  box_date的形式
   CHECK_EQ(input_count, tmp_input_count);
   CHECK_EQ(label_count, tmp_label_count);
+  
 }
 
 
 template <typename Dtype>
 void RegionLossLayer<Dtype>::Reshape(
-    const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
-  LossLayer<Dtype>::Reshape(bottom, top);
-  diff_.ReshapeLike(*bottom[0]);
-  real_diff_.ReshapeLike(*bottom[0]); 
+    const vector<Blob<Dtype>*>& bottom, 
+    const vector<Blob<Dtype>*>& top) 
+{
+  LossLayer<Dtype>::Reshape(bottom, top);//定义了 top的形状 
+  diff_.ReshapeLike(*bottom[0]);// 输入参数梯度 形状 和 输入形状一直
+  real_diff_.ReshapeLike(*bottom[0]);
+  
 }
 
+//  层前向传播=======================================
 template <typename Dtype>
 void RegionLossLayer<Dtype>::Forward_cpu(
-  const vector<Blob<Dtype>*>& bottom, const vector<Blob<Dtype>*>& top) {
-  //const Dtype* input_data = bottom[0]->cpu_data();
+  const vector<Blob<Dtype>*>& bottom, // 输入
+  const vector<Blob<Dtype>*>& top)    // 输出
+{
+  //const Dtype* input_data = bottom[0]->cpu_data();// 网络输出 13*13*5*(5+num_class_)
   //std::cout<<"1"<<std::endl;
-  const Dtype* label_data = bottom[1]->cpu_data(); //[label,x,y,w,h]
+  const Dtype* label_data = bottom[1]->cpu_data();  // 标签     30 * [label,x,y,w,h]
   //std::cout<<"2"<<std::endl;
-  Dtype* diff = diff_.mutable_cpu_data();
-  caffe_set(diff_.count(), Dtype(0.0), diff);
+  
+  Dtype* diff = diff_.mutable_cpu_data();// 梯度指针
+  caffe_set(diff_.count(), Dtype(0.0), diff);// 初始化梯度为0
+  
   //std::cout<<"3"<<std::endl;
+  // 初始化 loss输出变量信息
+  //      背景(0越好)  物体( 越接近1越好)  交并比(1)                 召回率    损失
   Dtype avg_anyobj(0.0), avg_obj(0.0), avg_iou(0.0), avg_cat(0.0), recall(0.0), loss(0.0);
   int count = 0;
   int class_count = 0;
+  
   //*********************************************************Reshape********************************************************//
+// N*(5*(5+num_class_))*13*13 -> N * (13*13) * 5 * (5+num_class_)
   Blob<Dtype> swap;
-  swap.Reshape(bottom[0]->num(), bottom[0]->height()*bottom[0]->width(), num_, bottom[0]->channels() / num_);
+  swap.Reshape(bottom[0]->num(), 
+               bottom[0]->height()*bottom[0]->width(), 
+               num_, 
+               bottom[0]->channels() / num_);
   //std::cout<<"4"<<std::endl;  
 
-  Dtype* swap_data = swap.mutable_cpu_data();
+  Dtype* swap_data = swap.mutable_cpu_data();// cpu上的数据
+  caffe_set(swap.count(), Dtype(0.0), swap_data);// 初始化为0
+  
   int index = 0;
-  for (int b = 0; b < bottom[0]->num(); ++b)
-    for (int h = 0; h < bottom[0]->height(); ++h)
-      for (int w = 0; w < bottom[0]->width(); ++w)
-        for (int c = 0; c < bottom[0]->channels(); ++c)
+  for (int b = 0; b < bottom[0]->num(); ++b)// 图片数量 N
+    for (int h = 0; h < bottom[0]->height(); ++h)// 13
+      for (int w = 0; w < bottom[0]->width(); ++w)// 13
+        for (int c = 0; c < bottom[0]->channels(); ++c)// (5*(5+num_class_))
         {
-          swap_data[index++] = bottom[0]->data_at(b,c,h,w);	
+          swap_data[index++] = bottom[0]->data_at(b,c,h,w);// 拷贝数据
         }
     
     //CHECK_EQ(bottom[0]->data_at(0,4,1,2),swap.data_at(0,15,0,4));
     //std::cout<<"5"<<std::endl;
     //*********************************************************Activation********************************************************//
     //disp(swap);
-    
-  for (int b = 0; b < swap.num(); ++b)
-    for (int c = 0; c < swap.channels(); ++c)
-      for (int h = 0; h < swap.height(); ++h)
+	
+ //  sigmoid激活输出===================================================
+  for (int b = 0; b < swap.num(); ++b)       // 图片数量 N
+    for (int c = 0; c < swap.channels(); ++c)// (13*13)
+      for (int h = 0; h < swap.height(); ++h)// 5
       {
         int index = b * swap.channels() * swap.height() * swap.width() + c * swap.height() * swap.width() + h * swap.width() + 4;
+        //float tep = swap_data[index];
+		// sigmoid 在 
         swap_data[index] = sigmoid(swap_data[index]);
-
+        // 这里 sigmod 激活之后怎么会出现 -nan的值?????  应该是下面出现错误================
+        //if(swap_data[index] < 0) std::cout<<"swap_data[index]<0 before sigmod: "<< tep << std::endl;
         CHECK_GE(swap_data[index], 0);
       }
-   
+	  
+/////////////////////////////////////////////////////////////////////////
    //std::cout<<"6"<<std::endl;
-  if (softmax_tree_ != ""){
-    for (int b = 0; b < swap.num(); ++b)
-      for (int c = 0; c < swap.channels(); ++c)
-        for (int h = 0; h < swap.height(); ++h)
-        {
+   
+//std::cout<<" softmax_tree_  " << softmax_tree_ << std::endl;
+//std::cout<<" num_class_     " << num_class_ << std::endl;
+
+  if (softmax_tree_ != "")
+  {
+    for (int b = 0; b < swap.num(); ++b)// 图片数量 N
+      for (int c = 0; c < swap.channels(); ++c)// (13*13)
+        for (int h = 0; h < swap.height(); ++h)// 5
+        {//  swap.width() = (5+num_class_)
+		// 每个边框的类别预测概率 20/80 减去最大值 (-,0]) 在指数映射 -> (0,1] 后归一化
           int index = b * swap.channels() * swap.height() * swap.width() + c * swap.height() * swap.width() + h * swap.width() + 5;
-          softmax_tree(swap_data + index, &t_);
+          softmax_tree(swap_data + index, &t_);// 类别树 分组 执行 softmax_region 
         }
   }
-  else {
+  
+  else 
+  {
     for (int b = 0; b < swap.num(); ++b)
       for (int c = 0; c < swap.channels(); ++c)
         for (int h = 0; h < swap.height(); ++h)
         {
+        // 前5个为 1+4 后面的为 每个边框的类别预测概率 
           int index = b * swap.channels() * swap.height() * swap.width() + c * swap.height() * swap.width() + h * swap.width() + 5;
-
-          softmax_region(swap_data+index, num_class_);
-          for (int i = 0; i < num_class_; ++i)
-          CHECK_GE(swap_data[index + i], 0);
+        // 类别概率  减去最大值 (-,0]) 在指数映射 -> (0,1] 后归一化
+          softmax_region(swap_data+index, num_class_);// 20/80类
+        // 这里 sigmod 激活之后怎么会出现 -nan的值?????
+        //if(swap_data[index] < 0) std::cout<<"swap_data[index]<0 before sigmod: "<< tep << std::endl;
+        for (int i = 0; i < num_class_; ++i)
+            CHECK_GE(swap_data[index + i], 0);
         }
   }
     //std::cout<<"7"<<std::endl;
