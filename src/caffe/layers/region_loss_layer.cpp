@@ -676,16 +676,23 @@ void RegionLossLayer<Dtype>::Forward_cpu(
     LOG(INFO) << "avg_noobj: "<< avg_anyobj/(side_*side_*num_*bottom[0]->num()) << " avg_obj: " << avg_obj/count <<" avg_iou: " << avg_iou/count << " avg_cat: " << avg_cat/class_count << " recall: " << recall/count << " class_count: "<< class_count;
   }
 }
-
+////////////////////////////////// 反向传播//////////////////////////////////
 template <typename Dtype>
-void RegionLossLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
-    const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
+void RegionLossLayer<Dtype>::Backward_cpu(
+const vector<Blob<Dtype>*>& top,
+const vector<bool>& propagate_down, // 是否需要更新
+const vector<Blob<Dtype>*>& bottom) 
+{
   //LOG(INFO) <<" propagate_down: "<< propagate_down[1] << " " << propagate_down[0];
-  if (propagate_down[1]) {
+  if (propagate_down[1]) 
+  {
     LOG(FATAL) << this->type()
                << " Layer cannot backpropagate to label inputs.";
   }
-  if (propagate_down[0]) {
+  
+  if (propagate_down[0]) 
+  {
+	  
     const Dtype sign(1.);
     const Dtype alpha = sign * top[0]->cpu_diff()[0] / bottom[0]->num();// 0.125
 	
