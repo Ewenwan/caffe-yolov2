@@ -1,6 +1,17 @@
+// 输出数据形式=========================
+// Datum datum;
+// 设置图片 data 像素数据区域============
+//    datum->set_data()
+//    datum->set_encoded(true);// 编码标志
+// 标签域================================
+//    datum->add_float_data(float(label));    //label  标签
+//    datum->add_float_data(float(difficult));//diff   偏移?
+//    datum->add_float_data(box[i]);//box[4]  x,y,w,h  (范围0~1)
+////////////////////////////////////////////////////////
 //  图片 + 边框标签 -> Datum datum: 
 // 图像像素数据域  datum->set_data();
 //  datum->add_float_data()  label + difficult + box[4]
+
 #include <algorithm>
 #include <fstream>  // NOLINT(readability/streams)
 #include <string>
